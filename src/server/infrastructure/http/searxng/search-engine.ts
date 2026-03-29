@@ -6,6 +6,7 @@ import type {
 	FileResultEntry,
 	ImageResultEntry,
 	SuggestResult,
+	VideoResultEntry,
 	WebResultEntry,
 } from "@/server/domain/value-objects";
 import {
@@ -86,6 +87,7 @@ const toSearXngCategoriesSearchParams = ({
 		[SearchCategory.WEB]: undefined,
 		[SearchCategory.IMAGES]: ["images"],
 		[SearchCategory.FILES]: ["files"],
+		[SearchCategory.VIDEOS]: ["videos"],
 	};
 
 	return map[category]?.join(",");
@@ -116,7 +118,7 @@ export const makeSearXngSearchEngine = ({
 	});
 
 	return {
-		search: async ({ query, category, safeSearch, timeRange }) => {
+		search: async ({ query, category, safeSearch, timeRange, page }) => {
 			const startedAt = performance.now();
 			const params = new URLSearchParams({
 				q: query,
@@ -136,6 +138,10 @@ export const makeSearXngSearchEngine = ({
 			const safesearchParam = toSearXngSafeSearchParam(safeSearch);
 			if (safesearchParam) {
 				params.set("safesearch", safesearchParam);
+			}
+
+			if (page && page > 1) {
+				params.set("pageno", String(page));
 			}
 
 			const endpoint = "/search";
@@ -161,42 +167,60 @@ export const makeSearXngSearchEngine = ({
 
 			const result: BaseSearchResult = {
 				results: searXngResponse.results
+					.map(
+						(
+							r,
+						):
+							| WebResultEntry
+							| ImageResultEntry
+							| FileResultEntry
+							| VideoResultEntry => {
+							if (category === SearchCategory.IMAGES) {
+								return {
+									type: ResultType.IMAGE,
+									title: r.title,
+									url: r.url,
+									imageSrc: resolveImageUrl(r.img_src) ?? "",
+									thumbnail: resolveImageUrl(r.thumbnail),
+								};
+							}
+
+							if (category === SearchCategory.FILES) {
+								return {
+									type: ResultType.FILE,
+									title: r.title,
+									url: r.url,
+									extension: extractFileExtension(r.url),
+								};
+							}
+
+							if (category === SearchCategory.VIDEOS) {
+								return {
+									type: ResultType.VIDEO,
+									title: r.title,
+									url: r.url,
+									thumbnail: resolveImageUrl(r.thumbnail),
+									iframeSrc: r.iframe_src ?? undefined,
+									content: r.content ?? "",
+									publishedDate: r.publishedDate ?? r.pubdate ?? undefined,
+								};
+							}
+
+							return {
+								type: ResultType.WEB,
+								title: r.title,
+								url: r.url,
+								content: r.content ?? "",
+								publishedDate: r.publishedDate ?? r.pubdate ?? undefined,
+							};
+						},
+					)
 					.filter((r) => {
 						if (category === SearchCategory.IMAGES) {
-							return (
-								resolveImageUrl(r.img_src) != null ||
-								resolveImageUrl(r.thumbnail) != null
-							);
+							const img = r as ImageResultEntry;
+							return img.imageSrc || img.thumbnail;
 						}
 						return true;
-					})
-					.map((r): WebResultEntry | ImageResultEntry | FileResultEntry => {
-						if (category === SearchCategory.IMAGES) {
-							return {
-								type: ResultType.IMAGE,
-								title: r.title,
-								url: r.url,
-								imageSrc: resolveImageUrl(r.img_src) ?? "",
-								thumbnail: resolveImageUrl(r.thumbnail),
-							};
-						}
-
-						if (category === SearchCategory.FILES) {
-							return {
-								type: ResultType.FILE,
-								title: r.title,
-								url: r.url,
-								extension: extractFileExtension(r.url),
-							};
-						}
-
-						return {
-							type: ResultType.WEB,
-							title: r.title,
-							url: r.url,
-							content: r.content ?? "",
-							publishedDate: r.publishedDate ?? r.pubdate ?? undefined,
-						};
 					}),
 				count: searXngResponse.results.length,
 			};
@@ -207,6 +231,7 @@ export const makeSearXngSearchEngine = ({
 					endpoint,
 					status: response.status,
 					resultCount: result.count,
+					page: page ?? 1,
 					durationMs: Math.round(performance.now() - startedAt),
 				},
 				"SearXNG search request completed",
